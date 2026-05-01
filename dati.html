@@ -1,0 +1,360 @@
+﻿<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8" />
+    <title>Dashboard Quiz - Riepilogo</title>
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <!-- MSAL -->
+    <script type="module">import { PublicClientApplication } from "https://alcdn.msauth.net/browser/2.28.1/js/msal-browser.min.js";
+
+        /* =========================
+           CONFIG MSAL
+        ========================= */
+        const msalConfig = {
+            auth: {
+                clientId: "d1ddf0e4-d672-4dae-b554-9f8d0e2547a6",
+                redirectUri: window.location.href
+            }
+        };
+
+        const msalInstance = new PublicClientApplication(msalConfig);
+        let datiArrayGlobal = [];
+
+        async function login() {
+            const result = await msalInstance.loginPopup({
+                scopes: ["Files.Read", "Files.Read.All"]
+            });
+            return result.accessToken;
+        }
+
+        async function getExcelRows(token) {
+            const url =
+                "https://graph.microsoft.com/v1.0/me/drive/root:/RisultatiQuiz.xlsx:/workbook/tables/Table1/rows";
+
+            const res = await fetch(url, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            const json = await res.json();
+            return json.value;
+        }
+
+        function mapExcelToDatiArray(rows) {
+            return rows.map(r => {
+                const v = r.values[0];
+
+                return {
+                    nome: v[0],
+                    cognome: v[1],
+                    email: v[2],
+                    professione: v[3],
+                    anniServizio: v[4],
+                    punteggio: Number(v[5]),
+                    risposte: JSON.parse(v[6])
+                };
+            });
+        }
+
+        (async () => {
+            try {
+                const token = await login();
+                const rows = await getExcelRows(token);
+                datiArrayGlobal = mapExcelToDatiArray(rows);
+                caricaDashboard(datiArrayGlobal);
+            } catch (err) {
+                console.error(err);
+                document.querySelector("#risultati tbody").innerHTML =
+                    '<tr><td colspan="5" style="color:red;">Errore accesso a OneDrive</td></tr>';
+            }
+        })();
+
+        /* =========================
+           DASHBOARD (INVARIATA)
+        ========================= */
+        function caricaDashboard(datiArray) {
+
+            const tbody = document.querySelector("#risultati tbody");
+            const statsList = document.getElementById("stats");
+            const filtroInput = document.getElementById("filtroInput");
+
+            tbody.innerHTML = "";
+            statsList.innerHTML = "";
+
+            let sommaPunteggi = 0;
+            let sommaRisposteCorrette = 0;
+            let sommaTotaleRisposte = 0;
+
+            const punteggiUtenti = [];
+            const nomiUtenti = [];
+            const rowsMap = [];
+
+            datiArray.forEach((dati, utenteIdx) => {
+                const corrette = dati.risposte.filter(r => r.correct).length;
+                const totale = dati.risposte.length;
+
+                sommaPunteggi += dati.punteggio;
+                sommaRisposteCorrette += corrette;
+                sommaTotaleRisposte += totale;
+
+                punteggiUtenti.push(dati.punteggio);
+                nomiUtenti.push(`${dati.nome} ${dati.cognome}`);
+
+                const utenteRiga = document.createElement("tr");
+                utenteRiga.classList.add("utente-riga");
+                utenteRiga.dataset.info =
+                    `${dati.nome} ${dati.cognome} ${dati.email}`.toLowerCase();
+
+                utenteRiga.innerHTML = `
+                            <td colspan="5">
+                                Utente #${utenteIdx + 1}: ${dati.nome} ${dati.cognome} |
+                                Professione: ${dati.professione} |
+                                Anni servizio: ${dati.anniServizio} |
+                                Email: ${dati.email} |
+                                Punteggio: ${dati.punteggio} |
+                                Corrette: ${corrette}/${totale}
+                            </td>
+                        `;
+                tbody.appendChild(utenteRiga);
+                rowsMap.push({ el: utenteRiga, text: utenteRiga.dataset.info });
+
+                dati.risposte.forEach((r, i) => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                                <td>${i + 1}</td>
+                                <td>${r.questionTitle}</td>
+                                <td>${r.userAnswer}</td>
+                                <td class="${r.correct ? 'verde' : 'rosso'}">
+                                    ${r.correct ? "✔️" : "❌"}
+                                </td>
+                                <td>${Array.isArray(r.correctAnswer) ? r.correctAnswer.join(", ") : r.correctAnswer}</td>
+                            `;
+                    tbody.appendChild(tr);
+                });
+
+                tbody.appendChild(document.createElement("tr")).innerHTML =
+                    '<td colspan="5">&nbsp;</td>';
+            });
+
+            const mediaPunteggio = (sommaPunteggi / datiArray.length).toFixed(2);
+            const percentualeCorrette =
+                ((sommaRisposteCorrette / sommaTotaleRisposte) * 100).toFixed(1);
+            const percentualeErrate = (100 - percentualeCorrette).toFixed(1);
+
+            statsList.innerHTML = `
+                        <div class="stat-box">
+                            <h4>👥 Numero utenti</h4>
+                            <p>${datiArray.length}</p>
+                        </div>
+                        <div class="stat-box">
+                            <h4>📈 Media punteggio</h4>
+                            <p>${mediaPunteggio}</p>
+                        </div>
+                        <div class="stat-box">
+                            <h4>✅ % Risposte corrette</h4>
+                            <p>${percentualeCorrette}%</p>
+                        </div>
+                    `;
+
+            new Chart(document.getElementById("chartRisposte"), {
+                type: 'pie',
+                data: {
+                    labels: ['✔️ Corrette', '❌ Errate'],
+                    datasets: [{
+                        data: [percentualeCorrette, percentualeErrate],
+                        backgroundColor: ['#2ecc71', '#e74c3c']
+                    }]
+                }
+            });
+
+            new Chart(document.getElementById("chartPunteggi"), {
+                type: 'bar',
+                data: {
+                    labels: nomiUtenti,
+                    datasets: [{
+                        label: 'Punteggio',
+                        data: punteggiUtenti,
+                        backgroundColor: '#3498db'
+                    }]
+                },
+                options: {
+                    scales: {
+                        x: {
+                            ticks: {
+                                autoSkip: false,
+                                maxRotation: 70,
+                                minRotation: 70
+                            }
+                        },
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+
+            filtroInput.addEventListener("input", () => {
+                const valore = filtroInput.value.toLowerCase();
+                rowsMap.forEach(({ el, text }) => {
+                    el.style.display = text.includes(valore) ? "" : "none";
+                });
+            });
+        }
+
+        /* =========================
+           EXPORT CSV
+        ========================= */
+        function esportaCSV() {
+            let csv = "Utente,Email,Domanda,Risposta Utente,Corretta,Risposta Corretta\n";
+
+            datiArrayGlobal.forEach(dati => {
+                dati.risposte.forEach(r => {
+                    csv += [
+                        `"${dati.nome} ${dati.cognome}"`,
+                        dati.email,
+                        `"${r.questionTitle}"`,
+                        `"${r.userAnswer}"`,
+                        r.correct ? "✔️" : "❌",
+                        `"${Array.isArray(r.correctAnswer) ? r.correctAnswer.join(", ") : r.correctAnswer}"`
+                    ].join(",") + "\n";
+                });
+            });
+
+            const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+            const link = document.createElement("a");
+            link.href = URL.createObjectURL(blob);
+            link.download = "quiz_risultati.csv";
+            link.click();
+        }
+
+
+        function esportaExcel() {
+            const rows = [];
+
+            datiArrayGlobal.forEach(dati => {
+                dati.risposte.forEach(r => {
+                    rows.push({
+                        Nome: dati.nome,
+                        Cognome: dati.cognome,
+                        Email: dati.email,
+                        Professione: dati.professione,
+                        "Anni servizio": dati.anniServizio,
+                        Domanda: r.questionTitle,
+                        "Risposta utente": r.userAnswer,
+                        Corretta: r.correct ? "SI" : "NO",
+                        "Risposta corretta": Array.isArray(r.correctAnswer)
+                            ? r.correctAnswer.join(", ")
+                            : r.correctAnswer
+                    });
+                });
+            });
+
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Risultati");
+
+            XLSX.writeFile(wb, "risultati_quiz.xlsx");
+        }
+
+        // 👇 ESPONI LE FUNZIONI AL DOM
+        window.esportaExcel = esportaExcel;
+        window.esportaCSV = esportaCSV;
+</script>
+
+    <style>
+        body {
+            font-family: Arial;
+            padding: 20px;
+            background: #f9f9f9
+        }
+
+        canvas, table {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 0 8px rgba(0,0,0,.1)
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 20px
+        }
+
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px
+        }
+
+        th {
+            background: #f2f2f2
+        }
+
+        .verde {
+            color: green
+        }
+
+        .rosso {
+            color: red
+        }
+
+        .utente-riga {
+            background: #ddd;
+            font-weight: bold
+        }
+
+        .controls {
+            margin-bottom: 20px
+        }
+
+            .controls input, .controls button {
+                padding: 8px
+            }
+
+        .stats-container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap
+        }
+
+        .stat-box {
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            min-width: 200px
+        }
+    </style>
+</head>
+
+<body>
+    <h1>🩺 Dashboard Quiz - Riepilogo Studenti</h1>
+
+    <div class="controls">
+        <input type="text" id="filtroInput" placeholder="🔍 Filtra per nome o email">
+        <button onclick="esportaCSV()">📄 Esporta CSV</button>
+        <button onclick="window.print()">🖨️ Stampa PDF</button>
+        <button onclick="esportaExcel()">📊 Scarica Excel</button>
+
+    </div>
+
+    <div class="stats-container" id="stats"></div>
+
+    <div style="display:flex; gap:40px; flex-wrap:wrap; margin-top:30px">
+        <canvas id="chartRisposte" width="300" height="300"></canvas>
+        <canvas id="chartPunteggi" width="700" height="400"></canvas>
+    </div>
+
+    <table id="risultati">
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Domanda</th>
+                <th>Tua risposta</th>
+                <th>Esito</th>
+                <th>Risposta corretta</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</body>
+</html>
